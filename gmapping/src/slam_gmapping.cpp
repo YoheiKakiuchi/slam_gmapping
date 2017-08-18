@@ -114,6 +114,7 @@ Initial map dimensions and resolution:
 #include "ros/ros.h"
 #include "ros/console.h"
 #include "nav_msgs/MapMetaData.h"
+#include "geometry_msgs/PoseArray.h"
 
 #include "gmapping/sensor/sensor_range/rangesensor.h"
 #include "gmapping/sensor/sensor_odometry/odometrysensor.h"
@@ -256,6 +257,7 @@ void SlamGMapping::init()
 void SlamGMapping::startLiveSlam()
 {
   entropy_publisher_ = private_nh_.advertise<std_msgs::Float64>("entropy", 1, true);
+  pose_array_publisher_ = private_nh_.advertise<geometry_msgs::PoseArray>("pose_array", 1, true);
   sst_ = node_.advertise<nav_msgs::OccupancyGrid>("map", 1, true);
   sstm_ = node_.advertise<nav_msgs::MapMetaData>("map_metadata", 1, true);
   ss_ = node_.advertiseService("dynamic_map", &SlamGMapping::mapCallback, this);
@@ -699,11 +701,14 @@ SlamGMapping::updateMap(const sensor_msgs::LaserScan& scan)
                                 delta_);
 
   ROS_DEBUG("Trajectory tree:");
+  geometry_msgs::PoseArray pa;
+  int cntr = 0;
   for(GMapping::GridSlamProcessor::TNode* n = best.node;
       n;
       n = n->parent)
   {
-    ROS_DEBUG("  %.3f %.3f %.3f",
+    ROS_DEBUG("  %d / %.3f %.3f %.3f",
+              cntr,
               n->pose.x,
               n->pose.y,
               n->pose.theta);
@@ -712,10 +717,27 @@ SlamGMapping::updateMap(const sensor_msgs::LaserScan& scan)
       ROS_DEBUG("Reading is NULL");
       continue;
     }
+    ros::Time tm((n->reading[0]).getTime());
+    ROS_DEBUG("%d %d", tm.sec, tm.nsec);
     matcher.invalidateActiveArea();
     matcher.computeActiveArea(smap, n->pose, &((*n->reading)[0]));
     matcher.registerScan(smap, n->pose, &((*n->reading)[0]));
+    cntr++;
+    geometry_msgs::Pose p;
+    p.position.x = n->pose.x;
+    p.position.y = n->pose.y;
+    //p.position.z = 0;
+    p.position.z = (n->reading[0]).getTime();
+
+    p.orientation.x = 0;
+    p.orientation.y = 0;
+    p.orientation.z = sin(n->pose.theta/2);
+    p.orientation.w = cos(n->pose.theta/2);
+    pa.poses.push_back(p);
   }
+  pa.header.stamp = ros::Time( (best.node->reading[0]).getTime() );
+  pa.header.frame_id = map_frame_;
+  pose_array_publisher_.publish(pa);
 
   // the map may have expanded, so resize ros message as well
   if(map_.map.info.width != (unsigned int) smap.getMapSizeX() || map_.map.info.height != (unsigned int) smap.getMapSizeY()) {
